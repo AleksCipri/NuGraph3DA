@@ -22,7 +22,8 @@ class Encoder(nn.Module):
                  planes: tuple[str]):
         super().__init__()
         self.planar_net = nn.Linear(in_features, planar_features)
-        self.nexus_net = nn.Linear(3, nexus_features) # 3D position
+        #self.nexus_net = nn.Linear(3, nexus_features) # 3D position
+        self.nexus_features = nexus_features
         self.interaction_features = interaction_features
         self.planes = planes
 
@@ -34,8 +35,15 @@ class Encoder(nn.Module):
             data: Graph data object
         """
         for p in self.planes:
+            #print(data)
             data[p].x = self.planar_net(data[p].x)
-        data["sp"].x = self.nexus_net(data["sp"].pos)
+            #print(data["sp"])
+        #data["sp"].x = self.nexus_net(data["sp"].pos)
+            device = data[p].x.device
+        data["sp"].x = torch.zeros(data["sp"].num_nodes,
+                                   self.nexus_features,
+                                   device=device)
         data["evt"].x = torch.zeros(data["evt"].num_nodes,
                                     self.interaction_features,
-                                    device=data["sp"].x.device)
+                                    #device=data["sp"].x.device)
+                                    device=device)

@@ -13,7 +13,7 @@ import seaborn as sn
 import math
 
 from .linear import ClassLinear
-from ...util import RecallLoss, LogCoshLoss
+from ...util import RecallLoss, LogCoshLoss, MMDLoss
 
 class DecoderBase(nn.Module, ABC):
     '''Base class for all NuGraph decoders'''
@@ -53,6 +53,24 @@ class DecoderBase(nn.Module, ABC):
         for cm in self.confusion.values():
             cm.update(x, y)
         return loss, metrics
+
+    ############# UPDATED #############
+    def loss_DA(self,
+             batch,
+             stage: str,
+             confusion: bool = False):
+        x, y = self.arrange(batch)
+        metrics = self.metrics(x, y, stage)
+        w = self.weight * (-1 * self.temp).exp()
+        loss = w * self.loss_func(x, y) + self.temp + self.loss_mmd(batch)
+        metrics[f'loss_{self.name}/{stage}'] = loss
+        metrics[f'loss_mmd_{self.name}/{stage}'] = self.loss_mmd
+        if stage == 'train':
+            metrics[f'temperature/{self.name}'] = self.temp
+        for cm in self.confusion.values():
+            cm.update(x, y)
+        return loss, metrics
+    ############# UPDATED #############
 
     def draw_confusion_matrix(self, cm: tm.ConfusionMatrix) -> plt.Figure:
         '''Produce confusion matrix at end of epoch'''

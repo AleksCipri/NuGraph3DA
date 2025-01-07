@@ -13,11 +13,11 @@ from pytorch_lightning import LightningModule
 from .types import Data
 from .encoder import Encoder
 from .core import NuGraphCore
-from .decoders import SemanticDecoder, FilterDecoder, EventDecoder, VertexDecoder, InstanceDecoder
+from .decoders import SemanticDecoder, FilterDecoder, EventDecoderDA, VertexDecoder, InstanceDecoder
 
-from ...data import H5DataModule
+from ...data import H5DataModuleDA
 
-class NuGraph3(LightningModule):
+class NuGraph3DA(LightningModule):
     """
     NuGraph3 model architecture.
 
@@ -48,9 +48,9 @@ class NuGraph3(LightningModule):
                  semantic_classes: tuple[str] = ('MIP','HIP','shower','michel','diffuse'),
                  event_classes: tuple[str] = ('numu','nue','nc'),
                  num_iters: int = 5,
-                 event_head: bool = False,
-                 semantic_head: bool = True,
-                 filter_head: bool = True,
+                 event_head: bool = True,
+                 semantic_head: bool = False,
+                 filter_head: bool = False,
                  vertex_head: bool = False,
                  instance_head: bool = False,
                  use_checkpointing: bool = False,
@@ -83,7 +83,7 @@ class NuGraph3(LightningModule):
         self.decoders = []
 
         if event_head:
-            self.event_decoder = EventDecoder(
+            self.event_decoder = EventDecoderDA(
                 interaction_features,
                 event_classes)
             self.decoders.append(self.event_decoder)
@@ -133,26 +133,37 @@ class NuGraph3(LightningModule):
 
         Args:
             data: Graph data object
-            data_t: Graph data object, target domain
             stage: String tag defining the step type
         """
-        self.encoder(data)
+        # Check if the input is a list of two batches
+        if isinstance(data, list) and len(data) == 2:
+            batchA, batchB = data
+        else:
+            raise ValueError("Expected input data to be a list of two batches.")
+
+        
+        self.encoder(batchA)
+        self.encoder(batchB)
         
         for _ in range(self.num_iters):
-            self.core_net(data)
+            self.core_net(batchA)
+            self.core_net(batchB)
         total_loss = 0.
         total_metrics = {}
         for decoder in self.decoders:
-            loss, metrics = decoder(data, stage)
+            if hasattr(self, "event_decoder"):
+                loss, metrics = decoder(batchA, batchB, stage)
+            else: #ignore the second dataset and don't perform DA for this decoder
+                loss, metrics = decoder(batchA, stage)
             total_loss += loss
             total_metrics.update(metrics)
 
         #if hasattr(self, instance_decoder) and self.global_step > 1000:
         if hasattr(self, "instance_decoder") and self.global_step > 1000:
-            if isinstance(data, Batch):
-                data = Batch([self.instance_decoder.materialize(b) for b in data.to_data_list()])
+            if isinstance(batchA, Batch):
+                batchA = Batch([self.instance_decoder.materialize(b) for b in batchA.to_data_list()])
             else:
-                self.instance_decoder.materialize(data)
+                self.instance_decoder.materialize(batchA)
 
         return total_loss, total_metrics
 
@@ -174,20 +185,20 @@ class NuGraph3(LightningModule):
         self.logger.experiment.add_custom_scalars(scalars)
 
     def training_step(self,
-                      batch: Data,
+                      batch: [Data, Data],
                       batch_idx: int) -> float:
         loss, metrics = self(batch, 'train')
-        self.log('loss/train', loss, batch_size=batch.num_graphs, prog_bar=True)
-        self.log_dict(metrics, batch_size=batch.num_graphs)
+        self.log('loss/train', loss, batch_size=batch[0].num_graphs, prog_bar=True)
+        self.log_dict(metrics, batch_size=batch[0].num_graphs)
         self.log_memory(batch, 'train')
         return loss
 
     def validation_step(self,
-                        batch,
+                        batch: [Data, Data],
                         batch_idx: int) -> None:
         loss, metrics = self(batch, 'val')
-        self.log('loss/val', loss, batch_size=batch.num_graphs)
-        self.log_dict(metrics, batch_size=batch.num_graphs)
+        self.log('loss/val', loss, batch_size=batch[0].num_graphs)
+        self.log_dict(metrics, batch_size=batch[0].num_graphs)
 
     def on_validation_epoch_end(self) -> None:
         epoch = self.trainer.current_epoch + 1
@@ -195,11 +206,11 @@ class NuGraph3(LightningModule):
             decoder.on_epoch_end(self.logger, 'val', epoch)
 
     def test_step(self,
-                  batch,
-                  batch_idx: int = 0) -> None:
+                  batch: [Data, Data],
+                  batch_idx: int) -> None: #int = 0
         loss, metrics = self(batch, 'test', True)
-        self.log('loss/test', loss, batch_size=batch.num_graphs)
-        self.log_dict(metrics, batch_size=batch.num_graphs)
+        self.log('loss/test', loss, batch_size=batch[0].num_graphs)
+        self.log_dict(metrics, batch_size=batch[0].num_graphs)
         self.log_memory(batch, 'test')
 
     def on_test_epoch_end(self) -> None:
@@ -208,9 +219,9 @@ class NuGraph3(LightningModule):
             decoder.on_epoch_end(self.logger, 'test', epoch)
 
     def predict_step(self,
-                     batch: Data,
-                     batch_idx: int = 0) -> Data:
-        self(batch)
+                     batch: [Data, Data],
+                     batch_idx: int) -> [Data, Data]:  #int = 0
+        self(batch) 
         return batch
 
     def configure_optimizers(self) -> tuple:
@@ -236,7 +247,7 @@ class NuGraph3(LightningModule):
         cpu_mem = psutil.Process().memory_info().rss / float(1073741824)
         self.max_mem_cpu = max(self.max_mem_cpu, cpu_mem)
         self.log(f'memory_cpu/{stage}', self.max_mem_cpu,
-                 batch_size=batch.num_graphs, reduce_fx=torch.max)
+                 batch_size=batch[0].num_graphs, reduce_fx=torch.max)
 
         # log GPU memory
         if not hasattr(self, 'max_mem_gpu'):
@@ -246,7 +257,7 @@ class NuGraph3(LightningModule):
             gpu_mem = float(gpu_mem) / float(1073741824)
             self.max_mem_gpu = max(self.max_mem_gpu, gpu_mem)
             self.log(f'memory_gpu/{stage}', self.max_mem_gpu,
-                     batch_size=batch.num_graphs, reduce_fx=torch.max)
+                     batch_size=batch[0].num_graphs, reduce_fx=torch.max)
 
     @staticmethod
     def add_model_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
@@ -289,7 +300,7 @@ class NuGraph3(LightningModule):
         return parser
 
     @classmethod
-    def from_args(cls, args: argparse.Namespace, nudata: H5DataModule) -> 'NuGraph3':
+    def from_args(cls, args: argparse.Namespace, nudata: H5DataModuleDA) -> 'NuGraph3':
         """
         Construct model from arguments
 

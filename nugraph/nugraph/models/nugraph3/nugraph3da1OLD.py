@@ -15,9 +15,11 @@ from .encoder import Encoder
 from .core import NuGraphCore
 from .decoders import SemanticDecoder, FilterDecoder, EventDecoder, VertexDecoder, InstanceDecoder
 
-from ...data import H5DataModule
+from ...data import H5DataModuleDA
 
-class NuGraph3(LightningModule):
+from ...util.MMDLoss import MMDLoss1batch
+
+class NuGraph3DA(LightningModule):
     """
     NuGraph3 model architecture.
 
@@ -139,14 +141,23 @@ class NuGraph3(LightningModule):
         self.encoder(data)
         
         for _ in range(self.num_iters):
-            self.core_net(data)
+            encoded = self.core_net(data)
         total_loss = 0.
         total_metrics = {}
+
+        # Calculate MMD Loss
+        mmd_loss_instance = MMDLoss1batch()  # Create an instance of MMDLoss
+        mmd_loss_value = torch.tensor(0.0)#, device=batch[0].device)  # Initialize MMD loss
+        mmd_loss_value = mmd_loss_instance(encoded)
+        self.log('train_mmd_loss', mmd_loss_value)
+        
         for decoder in self.decoders:
             loss, metrics = decoder(data, stage)
             total_loss += loss
             total_metrics.update(metrics)
 
+        final_loss = total_loss + 1 * mmd_loss_value
+        
         #if hasattr(self, instance_decoder) and self.global_step > 1000:
         if hasattr(self, "instance_decoder") and self.global_step > 1000:
             if isinstance(data, Batch):
@@ -154,7 +165,7 @@ class NuGraph3(LightningModule):
             else:
                 self.instance_decoder.materialize(data)
 
-        return total_loss, total_metrics
+        return final_loss, total_metrics
 
     def on_train_start(self):
         hpmetrics = { 'max_lr': self.hparams.lr }
@@ -289,7 +300,7 @@ class NuGraph3(LightningModule):
         return parser
 
     @classmethod
-    def from_args(cls, args: argparse.Namespace, nudata: H5DataModule) -> 'NuGraph3':
+    def from_args(cls, args: argparse.Namespace, nudata: H5DataModuleDA) -> 'NuGraph3':
         """
         Construct model from arguments
 

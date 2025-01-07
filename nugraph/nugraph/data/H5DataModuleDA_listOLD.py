@@ -11,13 +11,17 @@ from torch_geometric.loader import DataLoader
 from torch_geometric.transforms import Compose
 from pytorch_lightning import LightningDataModule
 
+
 from ..data import H5Dataset, BalanceSampler
 from ..util import PositionFeatures, FeatureNormMetric, FeatureNorm, HierarchicalEdges, EventLabels
+from itertools import islice, cycle  # Ensure islice is imported
 
-class H5DataModule(LightningDataModule):
+
+class H5DataModuleDA(LightningDataModule):
     """PyTorch Lightning data module for neutrino graph data."""
     def __init__(self,
                  data_path: str,
+                 datat_path: str,
                  batch_size: int,
                  shuffle: str = 'random',
                  balance_frac: float = 0.1,
@@ -29,6 +33,7 @@ class H5DataModule(LightningDataModule):
         warnings.filterwarnings("ignore", ".*does not have many workers.*")
 
         self.filename = data_path
+        self.filenamet = datat_path
         self.batch_size = batch_size
         if shuffle != 'random' and shuffle != 'balance':
             print('shuffle argument must be "random" or "balance".')
@@ -86,6 +91,59 @@ class H5DataModule(LightningDataModule):
         self.val_dataset = H5Dataset(self.filename, val_samples, transform)
         self.test_dataset = H5Dataset(self.filename, test_samples, transform)
 
+####UPDATED#### ADD preprocessing of target dataset
+        with h5py.File(self.filenamet) as ft:
+
+            # load metadata
+            try:
+                self.planes = ft['planes'].asstr()[()].tolist()
+                self.semantic_classes = ft['semantic_classes'].asstr()[()].tolist()
+            except:
+                print('Metadata not found in file! "planes" and "semantic_classes" are required.')
+                sys.exit()
+
+            # load optional event labels
+            if 'event_classes' in ft:
+                self.event_classes = ft['event_classes'].asstr()[()].tolist()
+            else:
+                self.event_classes = None
+
+            # load sample splits
+            try:
+                train_samplest = ft['samples/train'].asstr()[()]
+                val_samplest = ft['samples/validation'].asstr()[()]
+                test_samplest = ft['samples/test'].asstr()[()]
+            except:
+                print('Sample splits not found in file! Call "generate_samples" to create them.')
+                sys.exit()
+
+            # load data sizes
+            try:
+                self.train_datasize = ft['datasize/train'][()]
+            except:
+                print('Data size array not found in file! Call "generate_samples" to create it.')
+                sys.exit()
+
+            # load feature normalisations
+            try:
+                normt = {}
+                for p in self.planes:
+                    normt[p] = tensor(ft[f'norm/{p}'][()])
+            except:
+                print('Feature normalisations not found in file! Call "generate_norm" to create them.')
+                sys.exit()
+
+        transformt = Compose((PositionFeatures(self.planes),
+                             FeatureNorm(self.planes, normt),
+                             HierarchicalEdges(self.planes),
+                             EventLabels()))
+
+        self.train_datasett = H5Dataset(self.filenamet, train_samplest, transformt)
+        self.val_datasett = H5Dataset(self.filenamet, val_samplest, transformt)
+        self.test_datasett = H5Dataset(self.filenamet, test_samplest, transformt)
+
+####UPDATED####
+    
     @staticmethod
     def generate_samples(data_path: str):
         with h5py.File(data_path) as f:
@@ -157,48 +215,7 @@ class H5DataModule(LightningDataModule):
                     del f[key]
                 f[key] = metrics[p].compute()
 
-    def train_dataloader(self) -> DataLoader:
-        if self.shuffle == 'balance':
-            shuffle = False
-            sampler = BalanceSampler.BalanceSampler(
-                        datasize=self.train_datasize,
-                        batch_size=self.batch_size, 
-                        balance_frac=self.balance_frac)
-        else:
-            shuffle = True
-            sampler = None
-
-        return DataLoader(self.train_dataset,
-                          batch_size=self.batch_size,
-                          sampler=sampler, drop_last=True, 
-                          shuffle=shuffle, pin_memory=True)
-
-    def val_dataloader(self) -> DataLoader:
-        return DataLoader(self.val_dataset,
-                          batch_size=self.batch_size)
-
-    def test_dataloader(self) -> DataLoader:
-        return DataLoader(self.test_dataset,
-                          batch_size=self.batch_size)
-
-    # #####UPDATED ####
-    # def on_exception(self, exception):
-    #     if isinstance(exception, FileNotFoundError):
-    #         print(f"File not found: {self.h5_file_path}")
-    #     elif isinstance(exception, h5py.H5Error):
-    #         print(f"Error in HDF5 file: {self.h5_file_path}")
-    #     else:
-    #         print(f"Exception occurred: {exception}")
     
-    #     # Close the HDF5 file if it was opened
-    #     if hasattr(self, 'dataset') and self.dataset.h5_file is not None:
-    #         print("Closing HDF5 file due to exception...")
-    #         self.dataset.h5_file.close()
-    
-    #     # Return False to halt the training or True to continue training
-    #     return False
-    # ##### UPDATED #####
-
     @staticmethod
     def add_data_args(parser: ArgumentParser) -> ArgumentParser:
         data = parser.add_argument_group('data', 'Data module configuration')
@@ -210,7 +227,7 @@ class H5DataModule(LightningDataModule):
                           default='/raid/uboone/NuGraph2/numiallwr2.gnn.h5',
                           help='Location of input target data file')
         ########### UPDATED  ##############
-        data.add_argument('--batch-size', type=int, default=64,
+        data.add_argument('--batch-size', type=int, default=16,
                           help='Size of each batch of graphs')
         data.add_argument('--limit_train_batches', type=int, default=None,
                           help='Max number of training batches to be used')
@@ -221,3 +238,50 @@ class H5DataModule(LightningDataModule):
         data.add_argument('--balance-frac', type=float, default=0.1,
                           help='Fraction of dataset to use for workload balancing')
         return parser
+
+# ##UPDATED#### for now it just returns a list of the same data loader but twice so I can debug training loop
+
+    def train_dataloader(self) -> list[DataLoader]:
+        if self.shuffle == 'balance':
+            shuffle = False
+            sampler = BalanceSampler.BalanceSampler(
+                        datasize=self.train_datasize,
+                        batch_size=self.batch_size, 
+                        balance_frac=self.balance_frac)
+            
+        else:
+            shuffle = True
+            sampler = None
+
+        dataloader_train = DataLoader(self.train_dataset,
+                          batch_size=self.batch_size,
+                          sampler=sampler, drop_last=True, 
+                          shuffle=shuffle, pin_memory=True)
+
+        dataloader_train_t = DataLoader(self.train_datasett,
+                          batch_size=self.batch_size,
+                          sampler=sampler, drop_last=True, 
+                          shuffle=shuffle, pin_memory=True)
+
+        return [dataloader_train, dataloader_train_t]
+
+    # def val_dataloader(self) -> list[DataLoader]:
+    #     dataloader_val = DataLoader(self.val_dataset,
+    #                       batch_size=self.batch_size)
+
+    #     dataloader_val_t = DataLoader(self.val_datasett,
+    #                       batch_size=self.batch_size)
+        
+    #     return [dataloader_val, dataloader_val_t]
+    
+    def val_dataloader(self) -> DataLoader:
+        dataloader_val = DataLoader(self.val_dataset,
+                          batch_size=self.batch_size)
+        return dataloader_val
+
+    def test_dataloader(self) -> DataLoader:
+        dataloader_test = DataLoader(self.test_dataset,
+                          batch_size=self.batch_size)
+    
+        return dataloader_test
+###UPDATED####

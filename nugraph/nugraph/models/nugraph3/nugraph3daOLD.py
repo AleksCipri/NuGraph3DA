@@ -12,12 +12,14 @@ from pytorch_lightning import LightningModule
 
 from .types import Data
 from .encoder import Encoder
-from .core import NuGraphCore
+from .coreda import NuGraphCoreDA
 from .decoders import SemanticDecoder, FilterDecoder, EventDecoder, VertexDecoder, InstanceDecoder
 
-from ...data import H5DataModule
+from ...data import H5DataModuleDA
 
-class NuGraph3(LightningModule):
+from ...util.MMDLoss import MMDLoss
+
+class NuGraph3DA(LightningModule):
     """
     NuGraph3 model architecture.
 
@@ -48,9 +50,9 @@ class NuGraph3(LightningModule):
                  semantic_classes: tuple[str] = ('MIP','HIP','shower','michel','diffuse'),
                  event_classes: tuple[str] = ('numu','nue','nc'),
                  num_iters: int = 5,
-                 event_head: bool = False,
-                 semantic_head: bool = True,
-                 filter_head: bool = True,
+                 event_head: bool = True,
+                 semantic_head: bool = False,
+                 filter_head: bool = False,
                  vertex_head: bool = False,
                  instance_head: bool = False,
                  use_checkpointing: bool = False,
@@ -74,13 +76,16 @@ class NuGraph3(LightningModule):
                                nexus_features, interaction_features,
                                planes)
 
-        self.core_net = NuGraphCore(planar_features,
+        self.core_net = NuGraphCoreDA(planar_features,
                                     nexus_features,
                                     interaction_features,
                                     planes,
                                     use_checkpointing)
-
         self.decoders = []
+        ######UPDATED#####
+        # self.encoded_batches = []
+        # self.encoded_batches_v = []
+        #####UPDATED#####
 
         if event_head:
             self.event_decoder = EventDecoder(
@@ -136,25 +141,28 @@ class NuGraph3(LightningModule):
             data_t: Graph data object, target domain
             stage: String tag defining the step type
         """
-        self.encoder(data)
         
+        encoding = self.encoder(data)
         for _ in range(self.num_iters):
-            self.core_net(data)
-        total_loss = 0.
-        total_metrics = {}
-        for decoder in self.decoders:
-            loss, metrics = decoder(data, stage)
-            total_loss += loss
-            total_metrics.update(metrics)
+            encoding = self.core_net(data)
 
-        #if hasattr(self, instance_decoder) and self.global_step > 1000:
-        if hasattr(self, "instance_decoder") and self.global_step > 1000:
-            if isinstance(data, Batch):
-                data = Batch([self.instance_decoder.materialize(b) for b in data.to_data_list()])
-            else:
-                self.instance_decoder.materialize(data)
+       
+        # total_loss = 0.
+        # total_metrics = {}
+        # for decoder in self.decoders:
+        #     loss, metrics = decoder(data, stage)
+        #     total_loss += loss
+        #     total_metrics.update(metrics)
 
-        return total_loss, total_metrics
+        # #if hasattr(self, instance_decoder) and self.global_step > 1000:
+        # if hasattr(self, "instance_decoder") and self.global_step > 1000:
+        #     if isinstance(data, Batch):
+        #         data = Batch([self.instance_decoder.materialize(b) for b in data.to_data_list()])
+        #     else:
+        #         self.instance_decoder.materialize(data)
+
+        # return total_loss, total_metrics
+        return encoding
 
     def on_train_start(self):
         hpmetrics = { 'max_lr': self.hparams.lr }
@@ -172,22 +180,139 @@ class NuGraph3(LightningModule):
                 f'semantic_accuracy_class_val/{c}'
             ]]
         self.logger.experiment.add_custom_scalars(scalars)
-
+        
+    
     def training_step(self,
                       batch: Data,
-                      batch_idx: int) -> float:
-        loss, metrics = self(batch, 'train')
-        self.log('loss/train', loss, batch_size=batch.num_graphs, prog_bar=True)
-        self.log_dict(metrics, batch_size=batch.num_graphs)
-        self.log_memory(batch, 'train')
-        return loss
+                      batch_idx: int, dataloader_idx=0) -> float:
+
+        ###UPDATED#### unpacking batches
+        # Unpack the batch (should be a list of tensors)
+        if isinstance(batch, list) and len(batch) == 2:
+            data1, data2 = batch[0], batch[1] #in case there are no labels just graphs? -seems ok now
+        else:
+            raise ValueError("Expected batch to be a list containing two DataLoader outputs.")
+        
+        #####UPDATED######
+        loss = 0.
+        total_loss = 0.
+        decoder_loss = 0.
+        total_metrics = {}
+
+        self.encoder(data1)
+        for _ in range(self.num_iters):
+            encoded1 = self.core_net(data1)
+
+        for decoder in self.decoders:
+            loss, metrics = decoder(data1, 'train') 
+            loss += loss
+            total_metrics.update(metrics)
+            
+        if hasattr(self, "instance_decoder") and self.global_step > 1000:
+            if isinstance(data1, Batch):
+                data1 = Batch([self.instance_decoder.materialize(b) for b in data1.to_data_list()])
+            else:
+                self.instance_decoder.materialize(data1)
+                
+        self.encoder(data2)
+        for _ in range(self.num_iters):
+            encoded2 = self.core_net(data2)
+
+        if encoded1 is None:
+            raise ValueError("Encoded1 is None. Check the encoder output.")
+        if encoded2 is None:
+            raise ValueError("Encoded2 is None. Check the encoder output.")
+        
+        # Calculate MMD Loss
+        mmd_loss_instance = MMDLoss()  # Create an instance of MMDLoss
+        mmd_loss_value = torch.tensor(0.0)#, device=batch[0].device)  # Initialize MMD loss
+        # if len(self.encoded_batches) > 0: # Ensure we have an encoded batch from the first dataloader
+        #     last_encoded = self.encoded_batches[-1]
+        #     with torch.no_grad(): # Ensure no gradient tracking for the previous batch
+        #         mmd_loss_value = mmd_loss_instance(self.encoded_batches[-1], encoded2)
+        #    self.log('train_mmd_loss', mmd_loss_value)
+        mmd_loss_value = mmd_loss_instance(encoded1, encoded2)
+        self.log('train_mmd_loss', mmd_loss_value, batch_size=data1.num_graphs)
+
+        #Update the stored encoded batch
+        #self.encoded_batches.append(encoded1)
+
+        # Calculate total loss
+        total_loss = loss + 1 * mmd_loss_value  # Scale MMD loss if needed
+
+         # Debug: Print the calculated loss values
+        #print(f"Decoder Loss: {loss.item()}, MMD Loss: {mmd_loss_value.item()}, Total Loss: {total_loss.item()}")
+        
+        self.log('train_total_loss', total_loss)
+        #####UPDATED#########
+        self.log('loss/train', loss, batch_size=data1.num_graphs, prog_bar=True)
+        self.log_dict(metrics, batch_size=data1.num_graphs)
+        self.log_memory(data1, 'train')
+        return total_loss
 
     def validation_step(self,
                         batch,
-                        batch_idx: int) -> None:
-        loss, metrics = self(batch, 'val')
-        self.log('loss/val', loss, batch_size=batch.num_graphs)
-        self.log_dict(metrics, batch_size=batch.num_graphs)
+                        batch_idx: int) -> None:  
+        # Process data from the first validation dataloader
+        # Unpack the batch (should be a list of tensors)
+        if isinstance(batch, list) and len(batch) == 2:
+            data1_v, data2_v = batch[0], batch[1] #in case there are no labels just graphs? -seems ok now
+        else:
+            raise ValueError("Expected batch to be a list containing two DataLoader outputs.")
+
+        loss_v = 0.
+        total_loss_v = 0.
+        decoder_loss_v = 0.
+        total_metrics_v = {}
+
+        self.encoder(data1_v)
+        for _ in range(self.num_iters):
+            encoded1_v = self.core_net(data1_v)
+
+        for decoder in self.decoders:
+            loss_v, metrics_v = decoder(data1_v, 'val')
+            loss_v += loss_v
+            total_metrics_v.update(metrics_v)
+            
+        if hasattr(self, "instance_decoder") and self.global_step > 1000:
+            if isinstance(data1_v, Batch):
+                data1_v = Batch([self.instance_decoder.materialize(b) for b in data1_v.to_data_list()])
+            else:
+                self.instance_decoder.materialize(data1_v)
+
+        self.encoder(data2_v)
+        for _ in range(self.num_iters):
+            encoded2_v = self.core_net(data2_v)
+        
+        if encoded1_v is None:
+            raise ValueError("Encoded1_v is None. Check the encoder output.")
+        if encoded2_v is None:
+            raise ValueError("Encoded2_v is None. Check the encoder output.")
+        
+        # Calculate MMD Loss
+        mmd_loss_instance_v = MMDLoss()  # Create an instance of MMDLoss
+        mmd_loss_value_v = torch.tensor(0.0)#, device=batch[0].device)  # Initialize MMD loss
+        # if len(self.encoded_batches_v) > 0: # Ensure we have an encoded batch from the first dataloader
+        #     last_encoded = self.encoded_batches_v[-1]
+        #     with torch.no_grad(): # Ensure no gradient tracking for the previous batch
+        #         mmd_loss_value_v = mmd_loss_instance_v(self.encoded_batches_v[-1], encoded2_v)
+        #     self.log('train_mmd_loss_val', mmd_loss_value_v)
+        mmd_loss_value_v = mmd_loss_instance_v(encoded1_v, encoded2_v)
+        self.log('train_mmd_loss_val', mmd_loss_value_v, batch_size=data1_v.num_graphs)
+        
+        #Update the stored encoded batch
+        #self.encoded_batches_v.append(encoded1_v)
+
+        # Calculate total loss
+        total_loss_v = loss_v + 1 * mmd_loss_value_v  # Scale MMD loss if needed
+
+        
+        # Debug: Print the calculated loss values
+        print(f"Decoder Loss Val: {loss_v.item()}")
+
+        self.log('total_loss_val', loss_v, batch_size=data1_v.num_graphs)
+        self.log('loss/val_s', loss_v, batch_size=data1_v.num_graphs)
+        self.log_dict(total_metrics_v, batch_size=data1_v.num_graphs)
 
     def on_validation_epoch_end(self) -> None:
         epoch = self.trainer.current_epoch + 1
@@ -197,10 +322,21 @@ class NuGraph3(LightningModule):
     def test_step(self,
                   batch,
                   batch_idx: int = 0) -> None:
-        loss, metrics = self(batch, 'test', True)
-        self.log('loss/test', loss, batch_size=batch.num_graphs)
-        self.log_dict(metrics, batch_size=batch.num_graphs)
-        self.log_memory(batch, 'test')
+        
+        if isinstance(batch, list) and len(batch) == 2:
+            data1_t, data2_t = batch[0], batch[1] #in case there are no labels just graphs? -seems ok now
+        else:
+            raise ValueError("Expected batch to be a list containing two DataLoader outputs.")
+            
+        loss_ts, metrics_ts = self(data1_t, 'test', True)
+        self.log('loss/test_s', loss_ts, batch_size=data1_t.num_graphs)
+        self.log_dict(metrics_t, batch_size=data1_t.num_graphs)
+        self.log_memory(batch[0], 'test_source')
+
+        loss_tt, metrics_tt = self(data2_t, 'test', True)
+        self.log('loss/test_t', loss_tt, batch_size=data2_t.num_graphs)
+        self.log_dict(metrics_tt, batch_size=data2_t.num_graphs)
+        self.log_memory(batch[1], 'test_target')
 
     def on_test_epoch_end(self) -> None:
         epoch = self.trainer.current_epoch + 1
@@ -210,8 +346,16 @@ class NuGraph3(LightningModule):
     def predict_step(self,
                      batch: Data,
                      batch_idx: int = 0) -> Data:
-        self(batch)
-        return batch
+        
+        if isinstance(batch, list) and len(batch) == 2:
+            data1_pred, data2_pred = batch[0], batch[1] #in case there are no labels just graphs? -seems ok now
+        else:
+            raise ValueError("Expected batch to be a list containing two DataLoader outputs.")
+            
+        pred1 = self(data1_pred)
+        pred2 = self(data2_pred)
+        return pred1, pred2
+
 
     def configure_optimizers(self) -> tuple:
         optimizer = AdamW(self.parameters(),
@@ -289,7 +433,7 @@ class NuGraph3(LightningModule):
         return parser
 
     @classmethod
-    def from_args(cls, args: argparse.Namespace, nudata: H5DataModule) -> 'NuGraph3':
+    def from_args(cls, args: argparse.Namespace, nudata: H5DataModuleDA) -> 'NuGraph3':
         """
         Construct model from arguments
 
