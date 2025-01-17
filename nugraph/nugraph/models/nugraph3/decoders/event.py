@@ -24,7 +24,8 @@ class EventDecoder(nn.Module):
     """
     def __init__(self,
                  interaction_features: int,
-                 event_classes: list[str]):
+                 #event_classes: list[str]):  #use this for correct NG3 data
+                 event_classes: list['cc_nue', 'cc_numu', 'cc_nutau', 'nc']):
         super().__init__()
 
         # loss function
@@ -36,7 +37,7 @@ class EventDecoder(nn.Module):
         # metrics
         metric_args = {
             "task": "multiclass",
-            "num_classes": len(event_classes)
+            "num_classes": 4 #len(event_classes)
         }
         self.recall = tm.Recall(**metric_args)
         self.precision = tm.Precision(**metric_args)
@@ -45,9 +46,10 @@ class EventDecoder(nn.Module):
 
         # network
         self.net = nn.Linear(in_features=interaction_features,
-                             out_features=len(event_classes))
+                             out_features=4)#len(event_classes))
 
-        self.classes = event_classes
+        #self.classes = event_classes
+        self.classes = ['cc_nue', 'cc_numu', 'cc_nutau', 'nc']
 
     def forward(self, data: Data, stage: str = None) -> dict[str, Any]:
         """

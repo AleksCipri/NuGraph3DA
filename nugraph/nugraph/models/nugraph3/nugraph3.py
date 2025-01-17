@@ -48,12 +48,12 @@ class NuGraph3(LightningModule):
                  semantic_classes: tuple[str] = ('MIP','HIP','shower','michel','diffuse'),
                  event_classes: tuple[str] = ('numu','nue','nc'),
                  num_iters: int = 5,
-                 event_head: bool = False,
+                 event_head: bool = True,
                  semantic_head: bool = True,
                  filter_head: bool = True,
                  vertex_head: bool = False,
                  instance_head: bool = False,
-                 use_checkpointing: bool = False,
+                 use_checkpointing: bool = True,
                  lr: float = 0.001):
         super().__init__()
 

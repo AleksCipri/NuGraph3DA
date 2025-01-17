@@ -53,7 +53,7 @@ class NuGraph3DA(LightningModule):
                  filter_head: bool = False,
                  vertex_head: bool = False,
                  instance_head: bool = False,
-                 use_checkpointing: bool = False,
+                 use_checkpointing: bool = True,
                  lr: float = 0.001):
         super().__init__()
 
