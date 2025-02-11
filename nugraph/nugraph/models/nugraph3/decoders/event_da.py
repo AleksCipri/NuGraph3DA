@@ -81,6 +81,7 @@ class EventDecoderDA(nn.Module):
         """
 #### UPDATED ####
         # run network and calculate loss
+        #print(dataT)
         xS = self.net(dataS["evt"].x)
         yS = dataS["evt"].y
         #print(xS.size(),yS.size())
@@ -89,18 +90,18 @@ class EventDecoderDA(nn.Module):
 
         xT = self.net(dataT["evt"].x)
         yT = dataT["evt"].y
-        #print(x.size(),y.size())
         wT = 2 * (-1 * self.temp).exp()
         lossT = wT * self.loss(xT, yT) + self.temp
         
-        w_da = 1.0 #arbitrary mmd loss weight, update if needed or perform scheduling
 
         # MMD Alignment
         mmd = self.loss_mmd(dataS["evt"].x, dataT["evt"].x)
-        loss = lossS + lossT + w_da * mmd #lossT can be removed if we want or labels are missing
-
+        
+        w_da = 0.0 #arbitrary mmd loss weight, update if needed or perform scheduling
+        loss = lossS + w_da * mmd # +lossT  #it can be removed if we want or if labels are missing
+        #loss = lossS  #for noDA
     
-        # Semantic loss alignment
+        # Semantic loss alignment option
         #semantic = self.loss_semantic(dataS["evt"].x, yS, dataT["evt"].x, yT) 
         #loss = lossS + lossT + w_da * semantic
 
