@@ -49,8 +49,8 @@ class NuGraph3DA(LightningModule):
                  event_classes: tuple[str] = ('numu','nue','nc'),
                  num_iters: int = 5,
                  event_head: bool = True,
-                 semantic_head: bool = False,
-                 filter_head: bool = False,
+                 semantic_head: bool = True,
+                 filter_head: bool = True,
                  vertex_head: bool = False,
                  instance_head: bool = False,
                  use_checkpointing: bool = True,
@@ -151,8 +151,13 @@ class NuGraph3DA(LightningModule):
         total_loss = 0.
         total_metrics = {}
         for decoder in self.decoders:
-            if hasattr(self, "event_decoder"):
+            if decoder == self.event_decoder: 
+                # Pass both batches to the event_decoder
                 loss, metrics = decoder(batchA, batchB, stage)
+            
+            #if hasattr(self, "event_decoder"):
+            #    loss, metrics = decoder(batchA, batchB, stage)
+            
             else: #ignore the second dataset and don't perform DA for this decoder
                 loss, metrics = decoder(batchA, stage)
             total_loss += loss
