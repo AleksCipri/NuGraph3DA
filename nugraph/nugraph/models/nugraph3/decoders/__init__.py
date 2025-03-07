@@ -6,5 +6,8 @@ from .vertex import VertexDecoder
 from .instance import InstanceDecoder
 
 #### UPDATED #####
-from .event_da import EventDecoderDA
+from .event_da_mmd import EventDecoderDAmmd
+from .event_da_dann import EventDecoderDAdann
+from .event_da_semantic import EventDecoderDASemantic
+from .event_da_sinkhorn import EventDecoderDASinkhorn
 #### UPDATED #####
