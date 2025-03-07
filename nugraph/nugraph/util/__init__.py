@@ -11,6 +11,6 @@ from .scriptutils import configure_device
 from .MMDLoss import MMDLoss
 from .SemanticLoss import SemanticAlignmentLoss
 from .Isomap import IsomapCombinedPlot
+from .DANNLoss import ReverseLayerF
+from .SinkhornLoss import Sinkhorn
 ### UPDATED ###
-
-#from .MMDLoss import Sinkhorn

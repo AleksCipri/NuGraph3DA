@@ -13,7 +13,7 @@ from pytorch_lightning import LightningModule
 from .types import Data
 from .encoder import Encoder
 from .core import NuGraphCore
-from .decoders import SemanticDecoder, FilterDecoder, EventDecoderDA, VertexDecoder, InstanceDecoder
+from .decoders import SemanticDecoder, FilterDecoder, EventDecoderDAmmd, EventDecoderDAdann, EventDecoderDASemantic, EventDecoderDASinkhorn, VertexDecoder, InstanceDecoder
 
 from ...data import H5DataModuleDA
 
@@ -54,7 +54,9 @@ class NuGraph3DA(LightningModule):
                  vertex_head: bool = False,
                  instance_head: bool = False,
                  use_checkpointing: bool = True,
-                 lr: float = 0.001):
+                 lr: float = 0.001,
+                 da_loss: str = 'mmd',
+                 warmup_epochs: int = 0):
         super().__init__()
 
         warnings.filterwarnings("ignore", ".*NaN values found in confusion matrix.*")
@@ -69,6 +71,7 @@ class NuGraph3DA(LightningModule):
         self.event_classes = event_classes
         self.num_iters = num_iters
         self.lr = lr
+        self.warmup_epochs = warmup_epochs
 
         self.encoder = Encoder(in_features, planar_features,
                                nexus_features, interaction_features,
@@ -83,9 +86,22 @@ class NuGraph3DA(LightningModule):
         self.decoders = []
 
         if event_head:
-            self.event_decoder = EventDecoderDA(
-                interaction_features,
-                event_classes)
+            if da_loss=='mmd':
+                self.event_decoder = EventDecoderDAmmd(
+                    interaction_features,
+                    event_classes, warmup_epochs=self.warmup_epochs)
+            if da_loss=='dann':
+                self.event_decoder = EventDecoderDAdann(
+                    interaction_features,
+                    event_classes, warmup_epochs=self.warmup_epochs)
+            if da_loss=='sinkhorn':
+                self.event_decoder = EventDecoderDASinkhorn(
+                    interaction_features,
+                    event_classes, warmup_epochs=self.warmup_epochs)
+            if da_loss=='semantic':
+                self.event_decoder = EventDecoderDASemantic(
+                    interaction_features,
+                    event_classes, warmup_epochs=self.warmup_epochs)
             self.decoders.append(self.event_decoder)
             
         
@@ -189,10 +205,15 @@ class NuGraph3DA(LightningModule):
             ]]
         self.logger.experiment.add_custom_scalars(scalars)
 
+        """Enable domain adaptation loss after the warmup phase."""
+        if self.current_epoch >= self.warmup_epochs:
+            self.event_decoder.use_domain_adaptation = True
+
     def training_step(self,
                       batch: [Data, Data],
                       batch_idx: int) -> float:
         loss, metrics = self(batch, 'train')
+        
         self.log('loss/train', loss, batch_size=batch[0].num_graphs, prog_bar=True)
         self.log_dict(metrics, batch_size=batch[0].num_graphs)
         self.log_memory(batch, 'train')
@@ -237,6 +258,13 @@ class NuGraph3DA(LightningModule):
                 max_lr=self.lr,
                 total_steps=self.trainer.estimated_stepping_batches)
         return [optimizer], {'scheduler': onecycle, 'interval': 'step'}
+
+    def on_after_optimizer_step(self, optimizer: torch.optim.Optimizer) -> None:
+        """Clamps eta_s, eta_t, eta_da after each optimizer step."""
+        self.event_decoder.eta_s.data.clamp_(min=1e-3)
+        self.event_decoder.eta_t.data.clamp_(min=1e-3)
+        self.event_decoder.eta_da.data.clamp_(min=1e-3)
+   
 
     def log_memory(self, batch: Data, stage: str) -> None:
         """
@@ -302,6 +330,10 @@ class NuGraph3DA(LightningModule):
                            help='Maximum number of epochs to train for')
         model.add_argument('--learning-rate', type=float, default=0.001,
                            help='Max learning rate during training')
+        model.add_argument('--da-loss', type=str, choices=['dann', 'mmd', 'sinkhorn', 'semantic'], default='MMD',
+                           help='Which DA loss to use (options are: DANN, MMD, Sinkhorn)')
+        model.add_argument('--warmup', type=int, default=0,
+                           help='Include the warmup phase before domain adaptation loss turns on. Default is 0 i.e. no warmup.')
         return parser
 
     @classmethod
@@ -329,4 +361,6 @@ class NuGraph3DA(LightningModule):
             vertex_head=args.vertex,
             instance_head=args.instance,
             use_checkpointing=args.use_checkpointing,
-            lr=args.learning_rate)
+            lr=args.learning_rate,
+            da_loss=args.da_loss,
+            warmup_epochs=args.warmup)
