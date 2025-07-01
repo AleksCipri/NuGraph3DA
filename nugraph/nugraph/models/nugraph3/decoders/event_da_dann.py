@@ -28,11 +28,11 @@ class EventDecoderDAdann(nn.Module):
     """
     def __init__(self,
                  interaction_features: int,
-                 #event_classes: list[str]):  #use this for correct NG3 data
-                 event_classes: list['cc_nue', 'cc_numu', 'cc_nutau', 'nc'], warmup_epochs = 0
+                 #event_classes: list[str], warmup_epochs: int = 0  #use this for correct NG3 data
+                 event_classes: list['cc_nue', 'cc_numu', 'cc_nutau', 'nc'], warmup_epochs: int = 0
                 ):
         super().__init__()
-        self.warmup_epochs = warmup_epochs == 0
+        self.warmup_epochs = warmup_epochs
         self.use_domain_adaptation = False  # Will be updated by main model
 
         # loss function
@@ -40,13 +40,14 @@ class EventDecoderDAdann(nn.Module):
         ##### UPDATED #####
         self.loss_dann = nn.CrossEntropyLoss()
         loss_dann = torch.tensor(0.0)    
-        self.eta_s = torch.nn.Parameter(torch.tensor(1.0, requires_grad=True))
-        self.eta_t = torch.nn.Parameter(torch.tensor(1.0, requires_grad=True))
-        self.eta_da = torch.nn.Parameter(torch.tensor(1.0, requires_grad=True))
+        #self.eta_s = torch.nn.Parameter(torch.tensor(1.0, requires_grad=True))
+        #self.eta_t = torch.nn.Parameter(torch.tensor(1.0, requires_grad=True))
+        #self.eta_da = torch.nn.Parameter(torch.tensor(1.0, requires_grad=True))
         ##### UPDATED #####
         
         # temperature parameter
         self.temp = nn.Parameter(torch.tensor(0.))
+        self.temp_DA = nn.Parameter(torch.tensor(0.))
 
         # metrics
         metric_args = {
@@ -90,16 +91,20 @@ class EventDecoderDAdann(nn.Module):
         # run network and calculate loss
         xS = self.net(dataS["evt"].x)
         yS = dataS["evt"].y
-        wS = 2 * (-1 * self.temp).exp()
-        lossS = wS * self.loss(xS, yS) + self.temp
+        w = 2 * (-1 * self.temp).exp()
+        # lossS = wS * self.loss(xS, yS) + self.temp
+        lossS_noW = self.loss(xS, yS)
+        lossS = w * lossS_noW + self.temp
 
         xT = self.net(dataT["evt"].x)
+        #print(xT)
         yT = dataT["evt"].y
-        wT = 2 * (-1 * self.temp).exp()
-        lossT = wT * self.loss(xT, yT) + self.temp
+        #print(yT)
+        #wT = 2 * (-1 * self.temp).exp()  # note this is the same as wS, as it should be
+        lossT = w * self.loss(xT, yT) + self.temp
         
         if self.use_domain_adaptation:
-            print("Using DA!")
+            #print("Using DA!")
             ###############
             # Domain Classification
             alpha = 1
@@ -113,26 +118,69 @@ class EventDecoderDAdann(nn.Module):
     
             combined_image = torch.cat((xSS, xTT), 0).cuda()
             combined_label = torch.cat((ySS, yTT), 0).cuda()
-            
-            DA_loss = self.loss_dann(combined_image, combined_label)
-    
+
+
+            ##########################
+            ### ###  ###  ### FINAL VERSION
+            wDA = 2 * (-1 * self.temp_DA).exp()
+            raw_lossDA = wDA * self.loss_dann(combined_image, combined_label) + self.temp_DA 
+
+            #smooth capping
+            alpha = 20.0  # sharpness of transition 
+            sig = torch.sigmoid(alpha * lossS)
+            max_lossDA = sig * (lossS / 4) + (1 - sig) * (4 * lossS)
+            lossDA = torch.min(raw_lossDA, max_lossDA)
+
+            # Total loss
+            #lossDA = weighted_lossDA  #no capping just temperature scaling
+            loss = lossS + lossDA
+            ### ###  ###  ### FINAL VERSION UNCOMMENT LATER
+            #############################
+
+
+        
+            ### NEW VERSION EVENT+DA THEN SINGLE TEMP
+            #raw_lossDA = self.loss_dann(combined_image, combined_label)
+            #lossDA = torch.min(raw_lossDA, 0.25 * lossS_noW) 
+            #loss = w * (lossS_noW + lossDA) + self.temp
+            ### NEW VERSION EVENT+DA THEN SINGLE TEMP
+
+
+
+        
             # Compute weighted losses
-            weighted_lossS = self.eta_s * lossS
-            weighted_lossDA = self.eta_da * DA_loss
+            # weighted_lossS = self.eta_s * lossS
+            # weighted_lossDA = self.eta_da * DA_loss
             
-            # Apply constraint: Sinkhorn loss ≤ 0.25 * classification loss
-            max_lossDA = 0.25 * weighted_lossS
-            adjusted_lossDA = torch.min(weighted_lossDA, max_lossDA)
+            # # Apply constraint: Sinkhorn loss ≤ 0.25 * classification loss
+            # max_lossDA = 0.25 * weighted_lossS
+            # adjusted_lossDA = torch.min(weighted_lossDA, max_lossDA)
+            
+            # # Regularization to prevent weights from going to zero
+            # weight_penalty = torch.exp(-self.eta_s) + torch.exp(-self.eta_da)
+            # regularization = 0.01 * weight_penalty  # Small factor
+            
+            # # Total loss
+            # loss = weighted_lossS + adjusted_lossDA + regularization
+
+            # Smoothly blend between negative and positive behavior
+            #Cross-entropy loss values are typically in the range of 0 to a few units (e.g., 0–2). 
+            #A good starting point for α would be 20 to 50. If the curve is still too sharp or too soft, we can tune it up or down — 
+            #higher alpha means sharper transition, lower alpha means smoother blending.
+
+
+            #OLD sharp transition version
+            # if lossS < 0:  
+            #     max_lossDA = 4 * lossS  # Ensure DA remains smaller when losses are negative  
+            # else:  
+            #     max_lossDA = lossS / 4  # Maintain proportionality when lossS is positive  
             
             # Regularization to prevent weights from going to zero
-            weight_penalty = torch.exp(-self.eta_s) + torch.exp(-self.eta_da)
-            regularization = 0.01 * weight_penalty  # Small factor
-            
-            # Total loss
-            loss = weighted_lossS + adjusted_lossDA + regularization
+            #weight_penalty = torch.exp(-self.eta_s) + torch.exp(-self.eta_da)
+            #regularization = 0.01 * weight_penalty  # Small factor
 
         else:
-            print("Warmup phase. No DA!")
+            #print("Warmup phase. No DA!")
             loss = lossS
 
        
@@ -149,23 +197,22 @@ class EventDecoderDAdann(nn.Module):
             # metrics[f"DA_loss/{stage}"] = DA_loss
             # metrics[f"weightedcapped_DA_loss/{stage}"] = adjusted_lossDA
             #### UPDATED ####
-            metrics[f"loss_total/{stage}"] = loss
+            metrics[f"loss_event_total/{stage}"] = loss
             metrics[f"recall_event_source/{stage}"] = self.recall_s(xS, yS)
             metrics[f"precision_event_source/{stage}"] = self.precision_s(xS, yS)
             metrics[f"recall_event_target/{stage}"] = self.recall_t(xT, yT)
             metrics[f"precision_event_target/{stage}"] = self.precision_t(xT, yT)
+            metrics[f"loss_event_source/{stage}"] = lossS
+            metrics[f"loss_event_target/{stage}"] = lossT
+            metrics[f"Using_DA_or_not/{stage}"] = int(self.use_domain_adaptation)
             
             if self.use_domain_adaptation:
-                metrics[f"loss_event_source/{stage}"] = lossS
-                metrics[f"weighted_loss_event_source/{stage}"] = weighted_lossS
-                metrics[f"loss_event_target/{stage}"] = lossT
-                metrics[f"EtaS/{stage}"] = self.eta_s
-                metrics[f"EtaDA/{stage}"] = self.eta_da
-                metrics[f"DA_loss/{stage}"] = DA_loss
-                metrics[f"weightedcapped_DA_loss/{stage}"] = adjusted_lossDA
+                metrics[f"DA_loss_capped/{stage}"] = lossDA
+                metrics[f"DA_loss_uncapped/{stage}"] = raw_lossDA #weighted_lossDA
             
         if stage == "train":
             metrics["temperature/event"] = self.temp
+            metrics["temperature/DA"] = self.temp_DA
         if stage in ["val", "test"]:
             self.cm_recall_s.update(xS, yS)
             self.cm_precision_s.update(xS, yS)
@@ -253,3 +300,4 @@ class EventDecoderDAdann(nn.Module):
                                      isomap_fig, global_step=epoch)
         self.isomap.reset()
         #### UPDATED ####
+

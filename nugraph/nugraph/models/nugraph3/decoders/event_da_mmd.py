@@ -96,7 +96,7 @@ class EventDecoderDAmmd(nn.Module):
         lossT = wT * self.loss(xT, yT) + self.temp
         
         if self.use_domain_adaptation:
-            print("Using DA!")
+            #print("Using DA!")
             # MMD Alignment
             DA_loss = self.loss_mmd(dataS["evt"].x, dataT["evt"].x)
     
@@ -116,7 +116,7 @@ class EventDecoderDAmmd(nn.Module):
             loss = weighted_lossS + adjusted_lossDA + regularization
 
         else:
-            print("Warmup phase. No DA!")
+            #print("Warmup phase. No DA!")
             loss = lossS
 
 

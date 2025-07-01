@@ -96,7 +96,7 @@ class EventDecoderDASemantic(nn.Module):
         lossT = wT * self.loss(xT, yT) + self.temp
         
         if self.use_domain_adaptation:
-            print("Using DA!")
+            #print("Using DA!")
             # Semantic loss alignment option
             DA_loss = self.loss_semantic(dataS["evt"].x, yS, dataT["evt"].x, yT)
     
@@ -117,7 +117,7 @@ class EventDecoderDASemantic(nn.Module):
             loss = weighted_lossS + weighted_lossT + adjusted_lossDA + regularization
 
         else:
-            print("Warmup phase. No DA!")
+            #print("Warmup phase. No DA!")
             loss = lossS
         
 

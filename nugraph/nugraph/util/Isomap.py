@@ -5,7 +5,7 @@ from sklearn.preprocessing import LabelEncoder
 import torch
 
 class IsomapCombinedPlot:
-    def __init__(self, n_neighbors=5, n_components=2):
+    def __init__(self, n_neighbors=10, n_components=2):
         self.n_neighbors = n_neighbors
         self.n_components = n_components
         self.dataset1 = []

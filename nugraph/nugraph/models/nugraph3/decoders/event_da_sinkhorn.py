@@ -42,14 +42,15 @@ class EventDecoderDASinkhorn(nn.Module):
         ##### UPDATED #####
         self.loss_sinkhorn = Sinkhorn(blur=0.05)
         sinkhorn = torch.tensor(0.0)  
-        self.eta_s = torch.nn.Parameter(torch.tensor(1.0, requires_grad=True))
-        self.eta_t = torch.nn.Parameter(torch.tensor(1.0, requires_grad=True))
-        self.eta_da = torch.nn.Parameter(torch.tensor(1.0, requires_grad=True))
+        #self.eta_s = torch.nn.Parameter(torch.tensor(1.0, requires_grad=True))
+        #self.eta_t = torch.nn.Parameter(torch.tensor(1.0, requires_grad=True))
+        #self.eta_da = torch.nn.Parameter(torch.tensor(1.0, requires_grad=True))
         self.use_domain_adaptation = False 
         ##### UPDATED #####
         
         # temperature parameter
         self.temp = nn.Parameter(torch.tensor(0.))
+        self.temp_DA = nn.Parameter(torch.tensor(0.))
 
         # metrics
         metric_args = {
@@ -98,32 +99,40 @@ class EventDecoderDASinkhorn(nn.Module):
         lossT = wT * self.loss(xT, yT) + self.temp
         
         if self.use_domain_adaptation:
-            print("Using DA!")
+            #print("Using DA!")
             # Sinkhorn Alignment - automated
             pairwise_distances = torch.cdist(dataS["evt"].x, dataT["evt"].x, p=2)
             flattened_distances = pairwise_distances.view(-1)
             max_distance = torch.max(flattened_distances)
             dynamic_blur_val = 0.05 * max_distance.detach().cpu().numpy()
+
+            wDA = 2 * (-1 * self.temp_DA).exp()
+            #DA_loss = self.loss_sinkhorn(dataS["evt"].x, dataT["evt"].x, blur=max(dynamic_blur_val, 0.01))  #Apply lower bound to blur
+            weighted_lossDA = wDA * self.loss_sinkhorn(dataS["evt"].x, dataT["evt"].x, blur=max(dynamic_blur_val, 0.01)) + self.temp_DA  #Apply lower bound to blur
     
-            DA_loss = self.loss_sinkhorn(dataS["evt"].x, dataT["evt"].x, blur=max(dynamic_blur_val, 0.01))  #Apply lower bound to blur
-    
-            # Compute weighted losses
-            weighted_lossS = self.eta_s * lossS
-            weighted_lossDA = self.eta_da * DA_loss
+            # # Compute weighted losses
+            # weighted_lossS = self.eta_s * lossS
+            # weighted_lossDA = self.eta_da * DA_loss
             
             # Apply constraint: Sinkhorn loss ≤ 0.25 * classification loss
-            max_lossDA = 0.25 * weighted_lossS
-            adjusted_lossDA = torch.min(weighted_lossDA, max_lossDA)
+            #max_lossDA = 0.25 * weighted_lossS
+            #adjusted_lossDA = torch.min(weighted_lossDA, max_lossDA)
+            if lossS < 0:  
+                max_lossDA = 4 * lossS  # Ensure DA remains smaller when losses are negative  
+            else:  
+                max_lossDA = lossS / 4  # Maintain proportionality when lossS is positive  
+            lossDA = torch.min(weighted_lossDA, max_lossDA)
             
             # Regularization to prevent weights from going to zero
-            weight_penalty = torch.exp(-self.eta_s) + torch.exp(-self.eta_da)
-            regularization = 0.01 * weight_penalty  # Small factor
+            #weight_penalty = torch.exp(-self.eta_s) + torch.exp(-self.eta_da)
+            #regularization = 0.01 * weight_penalty  # Small factor
             
             # Total loss
-            loss = weighted_lossS + adjusted_lossDA + regularization
+            #loss = weighted_lossS + adjusted_lossDA + regularization
+            loss = lossS + lossDA
         
         else:
-            print("Warmup phase. No DA!")
+            #print("Warmup phase. No DA!")
             loss = lossS
         
     
@@ -147,15 +156,16 @@ class EventDecoderDASinkhorn(nn.Module):
             
             if self.use_domain_adaptation:
                 metrics[f"loss_event_source/{stage}"] = lossS
-                metrics[f"weighted_loss_event_source/{stage}"] = weighted_lossS
+                #metrics[f"weighted_loss_event_source/{stage}"] = weighted_lossS
                 metrics[f"loss_event_target/{stage}"] = lossT
-                metrics[f"EtaS/{stage}"] = self.eta_s
-                metrics[f"EtaDA/{stage}"] = self.eta_da
-                metrics[f"DA_loss/{stage}"] = DA_loss
-                metrics[f"weightedcapped_DA_loss/{stage}"] = adjusted_lossDA
+                #metrics[f"EtaS/{stage}"] = self.eta_s
+                #metrics[f"EtaDA/{stage}"] = self.eta_da
+                #metrics[f"DA_loss/{stage}"] = weighted_lossDA
+                metrics[f"weightedcapped_DA_loss/{stage}"] = lossDA
                 
         if stage == "train":
             metrics["temperature/event"] = self.temp
+            metrics["temperature/DA"] = self.temp_DA
         if stage in ["val", "test"]:
             self.cm_recall_s.update(xS, yS)
             self.cm_precision_s.update(xS, yS)
