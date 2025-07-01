@@ -205,9 +205,14 @@ class NuGraph3DA(LightningModule):
             ]]
         self.logger.experiment.add_custom_scalars(scalars)
 
-        """Enable domain adaptation loss after the warmup phase."""
-        if self.current_epoch >= self.warmup_epochs:
+    def on_train_epoch_start(self): #checking if DA shuld be turned on
+        epoch = self.trainer.current_epoch
+        if epoch >= self.event_decoder.warmup_epochs:
+            if not self.event_decoder.use_domain_adaptation:
+                print(f"[Epoch {epoch}] Enabling DA")
             self.event_decoder.use_domain_adaptation = True
+        else:
+            print(f"[Epoch {epoch}] DA is OFF (warmup phase)")
 
     def training_step(self,
                       batch: [Data, Data],
@@ -259,11 +264,12 @@ class NuGraph3DA(LightningModule):
                 total_steps=self.trainer.estimated_stepping_batches)
         return [optimizer], {'scheduler': onecycle, 'interval': 'step'}
 
+
     def on_after_optimizer_step(self, optimizer: torch.optim.Optimizer) -> None:
         """Clamps eta_s, eta_t, eta_da after each optimizer step."""
-        self.event_decoder.eta_s.data.clamp_(min=1e-3)
-        self.event_decoder.eta_t.data.clamp_(min=1e-3)
-        self.event_decoder.eta_da.data.clamp_(min=1e-3)
+        self.event_decoder.eta_s.data.clamp_(min=1e-3, max = 1)
+        self.event_decoder.eta_t.data.clamp_(min=1e-3, max = 1)
+        self.event_decoder.eta_da.data.clamp_(min=1e-3, max = 1)
    
 
     def log_memory(self, batch: Data, stage: str) -> None:
