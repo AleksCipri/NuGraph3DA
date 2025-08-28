@@ -5,9 +5,13 @@ from .event import EventDecoder
 from .vertex import VertexDecoder
 from .instance import InstanceDecoder
 
-#### UPDATED #####
+
 from .event_da_mmd import EventDecoderDAmmd
 from .event_da_dann import EventDecoderDAdann
 from .event_da_semantic import EventDecoderDASemantic
 from .event_da_sinkhorn import EventDecoderDASinkhorn
-#### UPDATED #####
+from .semantic_da_dann import SemanticDecoderDAdann
+from .semantic_da_mmd import SemanticDecoderDAmmd
+from .semantic_da_semantic import SemanticDecoderDAsemantic
+from .semantic_da_sinkhorn import SemanticDecoderDAsinkhorn
+
