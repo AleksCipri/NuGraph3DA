@@ -118,8 +118,8 @@ class EventDecoderDASinkhorn(nn.Module):
             lossDA = torch.min(raw_lossDA, max_lossDA)
             
             # Total loss
-            loss = lossS + lossT + lossDA
-            #loss = lossS + lossT + raw_lossDA
+            #loss = lossS + lossT + lossDA
+            loss = lossS + lossT + raw_lossDA
         
         else:
             #print("Warmup phase. No DA!")
