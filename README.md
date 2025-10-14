@@ -26,5 +26,3 @@ Other files which are updated:
 - **nugraph3_da_event_semantic** - new with DA in event and optionally in semantic (labels used from both datasets)
 - **nugraph3_da** - old version with DA just in event decoder (and no target labels)
 
-
-_______________________________________________
