@@ -50,3 +50,5 @@ tensorboard --port XXXX --bind_all --logdir /raid/$USER/logs --samples_per_plugi
 ```
 
 In the above example, you should replace `XXXX` with a unique port number of your choosing. Provided you're forwarding that port when working over SSH, you can then access the interface in a local browser at `localhost:XXXX`.
+
+

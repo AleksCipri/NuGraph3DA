@@ -4,12 +4,22 @@ import torch.nn as nn
 class SemanticAlignmentLoss(nn.Module):
     def __init__(self, metric='euclidean'):
         """
-        Semantic Alignment Loss.
-
-        Parameters:
-            metric: str, optional (default='euclidean')
-                The distance metric to use ('euclidean' or 'cosine').
-        """
+        Semantic Alignment Loss for domain adaptation.
+    
+        This loss encourages feature embeddings from different datasets 
+        (e.g., source and target domains) to align in the representation 
+        space when they share the same semantic label. By reducing the 
+        distance between class-consistent embeddings across domains, 
+        the model learns domain-invariant representations.
+    
+        Parameters
+        ----------
+        metric : str, optional (default='euclidean')
+            The distance metric used to compare feature embeddings.
+            Options are:
+            - 'euclidean': squared L2 distance
+            - 'cosine': cosine distance (1 - cosine similarity)
+            """
         super(SemanticAlignmentLoss, self).__init__()
         self.metric = metric
 
@@ -28,7 +38,8 @@ class SemanticAlignmentLoss(nn.Module):
                 Labels for dataset 2.
 
         Returns:
-            torch.Tensor: The semantic alignment loss.
+            torch.Tensor: The semantic alignment loss - scalar loss measuring the 
+            average distance between features of matching labels across domains.
         """
         unique_classes = torch.unique(torch.cat([labels1, labels2]))
         total_loss = 0.0

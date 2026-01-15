@@ -19,7 +19,10 @@ from itertools import islice, cycle  # Ensure islice is imported
 
 
 class H5DataModuleDA(LightningDataModule):
-    """PyTorch Lightning data module for neutrino graph data."""
+    """PyTorch Lightning data module for neutrino graph data.
+    Modified to handle domain adaptation training i.e.
+    dataloader that loads (batch_source, batch_target).
+    """
     def __init__(self,
                  data_path: str,
                  datat_path: str,
@@ -33,6 +36,9 @@ class H5DataModuleDA(LightningDataModule):
         # so we silence PyTorch Lightning's warnings
         warnings.filterwarnings("ignore", ".*does not have many workers.*")
 
+        
+        """SOURCE DATASET"""
+        
         self.filename = data_path
         self.filenamet = datat_path
         self.batch_size = batch_size
@@ -92,7 +98,8 @@ class H5DataModuleDA(LightningDataModule):
         self.val_dataset = H5Dataset(self.filename, val_samples, transform)
         self.test_dataset = H5Dataset(self.filename, test_samples, transform)
 
-####UPDATED#### 
+        
+        """TARGET DATASET"""
         with h5py.File(self.filenamet) as ft:
 
             # load metadata
@@ -139,16 +146,16 @@ class H5DataModuleDA(LightningDataModule):
         self.test_datasett = H5Dataset(self.filenamet, test_samplest, transform)
 
         
+        """COMBINE SOURCE AND TARGET DATASETS
+            Note:   CombinedDatasetCycle exists as well.
+                    This one cycles through the smaller dataset untill larger one is loaded. 
+                    Not fully tested yet!
+        """
         self.combined_train = CombinedDataset(self.train_dataset,  self.train_datasett)
         self.combined_val = CombinedDataset(self.val_dataset,  self.train_datasett)
         self.combined_test = CombinedDataset(self.test_dataset,  self.train_datasett)
 
-        # Option to switch to cycling over the shorted dataset - to be tested!
-        #self.combined_train = CombinedDatasetCycle(self.train_dataset,  self.train_datasett)
-        #self.combined_val = CombinedDatasetCycle(self.val_dataset,  self.train_datasett)
-        #self.combined_test = CombinedDatasetCycle(self.test_dataset,  self.train_datasett)
 
-####UPDATED####
 
     @staticmethod
     def generate_samples(data_path: str):
@@ -228,11 +235,10 @@ class H5DataModuleDA(LightningDataModule):
         data.add_argument('--data-path', type=str,
                           default='/raid/uboone/NuGraph2/NG2-paper.gnn.h5',
                           help='Location of input data file')
-        ########### UPDATED  ##############
+        ########### Adding target data path  ##############
         data.add_argument('--datat-path', type=str,
                           default='/raid/uboone/NuGraph2/numiallwr2.gnn.h5',
                           help='Location of input target data file')
-        ########### UPDATED  ##############
         data.add_argument('--batch-size', type=int, default=8,
                           help='Size of each batch of graphs')
         data.add_argument('--limit_train_batches', type=int, default=None,
@@ -247,13 +253,29 @@ class H5DataModuleDA(LightningDataModule):
 
     @staticmethod
     def collate_func(batch):
+        """
+            Custom collate function to combine a batch of paired dataset items.
+        
+            Converts a list of tuples (from CombinedDataset or CombinedDatasetCycle)
+            into two batched objects, one for each dataset.
+        
+            Args:
+                batch (list of tuples): Each element is a tuple (dataA, dataB).
+        
+            Returns:
+                tuple: Two batched objects (batchA, batchB) created using 
+                       `Batch.from_data_list` for datasetA and datasetB respectively.
+        """
         dataA_list, dataB_list = zip(*batch)  # Unzip dataA and dataB
         batchA = Batch.from_data_list(dataA_list)  # Batch data from datasetA
         batchB = Batch.from_data_list(dataB_list)  # Batch data from datasetB
         return batchA, batchB
 
     def train_dataloader(self) -> DataLoader:
-        # if self.shuffle == 'balance': #I need someone to explain this to me
+        #Removed because we cannot shuffle that way, since we now have 2 datasets. 
+        #Potentially we could rewrite this to be included I think.
+    
+        # if self.shuffle == 'balance': 
         #     shuffle = False
         #     sampler = BalanceSampler.BalanceSampler(
         #                 datasize=self.train_datasize,

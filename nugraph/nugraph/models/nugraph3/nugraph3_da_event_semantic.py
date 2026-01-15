@@ -13,10 +13,10 @@ from pytorch_lightning import LightningModule
 from .types import Data
 from .encoder import Encoder
 from .core import NuGraphCore
-from .decoders import SemanticDecoder, FilterDecoder, VertexDecoder, InstanceDecoder
+from .decoders import VertexDecoder, InstanceDecoder, FilterDecoder
 
 #New DA-enabled versions
-from .decoders import EventDecoderDAmmd, EventDecoderDAdann, EventDecoderDASemantic, EventDecoderDASinkhorn
+from .decoders import SemanticDecoderDAdann, SemanticDecoderDAmmd, EventDecoderDAmmd, EventDecoderDAdann, EventDecoderDASemantic, EventDecoderDASinkhorn 
 from ...data import H5DataModuleDA
 
 class NuGraph3DA(LightningModule):
@@ -24,10 +24,10 @@ class NuGraph3DA(LightningModule):
     NuGraph3 model architecture updated to enable DOMAIN ADAPTATION and work with SOURCE and TARGET data 
     using a combined dataloader with (batch_source, batch_target).
     
-    Domain adaptation is enabled in the EVENT decoder ONLY.
-    LABELS are being used only from the SOURCE data for the event decoder loss. 
-    All other decoder use onlu the source data.
-
+    Domain adaptation is enabled in the EVENT decoder and optionally in SEMANTIC decoder (default is NO).
+    LABELS are being used from both source and target data for all event and semantic decoder losses.
+    
+    If enabled all other decoders use original functions and can only handle batch_source data.
 
     Args:
         in_features: Number of input node features
@@ -56,15 +56,15 @@ class NuGraph3DA(LightningModule):
                  semantic_classes: tuple[str] = ('MIP','HIP','shower','michel','diffuse'),
                  event_classes: tuple[str] = ('numu','nue','nc'),
                  num_iters: int = 5,
-                 event_head: bool = True,
-                 semantic_head: bool = True,
-                 filter_head: bool = True,
+                 event_head: bool = False,
+                 semantic_head: bool = False,
+                 filter_head: bool = False,
                  vertex_head: bool = False,
                  instance_head: bool = False,
                  use_checkpointing: bool = True,
                  lr: float = 0.001,
-                 da_loss: str = 'mmd',   # New option ('default - 'mmd', 'dann', 'semantic', 'sinkhorn')
-                 warmup_epochs: int = 0):  # New option: start DA from the first epoch, or have some warmup period without it (default = no warmp)
+                 da_loss: str = 'mmd',  # New option ('default - 'mmd', 'dann', 'semantic', 'sinkhorn')
+                 warmup_epochs: int = 0): # New option: start DA from the first epoch, or have some warmup period without it (default = no warmp)
         super().__init__()
 
         warnings.filterwarnings("ignore", ".*NaN values found in confusion matrix.*")
@@ -92,7 +92,7 @@ class NuGraph3DA(LightningModule):
                                     use_checkpointing)
 
         self.decoders = []
-        
+
         """
         Choose the appropriate DA event decoder type based on the DA loss option.
         """
@@ -115,14 +115,51 @@ class NuGraph3DA(LightningModule):
                     event_classes, warmup_epochs=self.warmup_epochs)
             self.decoders.append(self.event_decoder)
             
+        """
+        Currently the only option for the semantic decoder with DA is 'dann' 
+        (default is no domain adaptation in this decoder, 
+        but both datasets are forwarded for the semantic loss to be calculated). 
         
+        Other DA methods and other DA decoders need to be implemented.
+        """       
         if semantic_head:
-            self.semantic_decoder = SemanticDecoder(
-                planar_features,
-                planes,
-                semantic_classes)
-            self.decoders.append(self.semantic_decoder)
+            if da_loss=='dann':
+                self.semantic_decoder = SemanticDecoderDAdann(
+                    planar_features,
+                    planes,
+                    semantic_classes, warmup_epochs=self.warmup_epochs)
+                self.decoders.append(self.semantic_decoder)
+                self.semantic_decoder.use_domain_adaptation = False
 
+            if da_loss=='mmd':
+                self.semantic_decoder = SemanticDecoderDAmmd(
+                    planar_features,
+                    planes,
+                    semantic_classes, warmup_epochs=self.warmup_epochs)
+                self.decoders.append(self.semantic_decoder)
+                self.semantic_decoder.use_domain_adaptation = False
+
+            if da_loss=='sinkhorn':
+                self.semantic_decoder = SemanticDecoderDAmmd(
+                    planar_features,
+                    planes,
+                    semantic_classes, warmup_epochs=self.warmup_epochs)
+                self.decoders.append(self.semantic_decoder)
+                self.semantic_decoder.use_domain_adaptation = False
+
+            if da_loss=='semantic':
+                self.semantic_decoder = SemanticDecoderDAmmd(
+                    planar_features,
+                    planes,
+                    semantic_classes, warmup_epochs=self.warmup_epochs)
+                self.decoders.append(self.semantic_decoder)
+                self.semantic_decoder.use_domain_adaptation = False
+                
+            # else:
+            #     raise NotImplementedError(
+            #         f"Domain adaptation method '{da_loss}' is not implemented for Semantic decoder. Only 'dann' and 'mmd' is supported.")
+
+        
         if filter_head:
             self.filter_decoder = FilterDecoder(
                 planar_features,
@@ -149,7 +186,7 @@ class NuGraph3DA(LightningModule):
         self.max_mem_cpu = 0.
         self.max_mem_gpu = 0.
 
-    def forward(self, data: Data,
+    def forward(self, data: [Data,Data],
                 stage: str = None):
         """
         NuGraph3 forward function
@@ -168,7 +205,7 @@ class NuGraph3DA(LightningModule):
         else:
             raise ValueError("Expected input data to be a list of two batches.")
 
-         # Pass both source and target batches through the encoder and core
+        # Pass both source and target batches through the encoder and core
         self.encoder(batchA)
         self.encoder(batchB)
         
@@ -177,13 +214,19 @@ class NuGraph3DA(LightningModule):
             self.core_net(batchB)
         total_loss = 0.
         total_metrics = {}
+
+        # Pass both batches through event and semantic decoder, which can handle both
         for decoder in self.decoders:
             if decoder == self.event_decoder: 
                 # Pass both batches to the event_decoder
                 loss, metrics = decoder(batchA, batchB, stage)
+
+            if decoder == self.semantic_decoder: 
+                # Pass both batches to the semantic_decoder
+                loss, metrics = decoder(batchA, batchB, stage)
             
-            else: #ignore the second dataset and don't perform DA for this decoder
-                loss, metrics = decoder(batchA, stage)
+            else: #TO BE FIXED: currently doesn't work with just batchA. But needs to be fixed if I want to turn on other decoder who cannot handle 2 batches
+                loss, metrics = decoder(batchA, batchB, stage)   
             total_loss += loss
             total_metrics.update(metrics)
 
@@ -211,15 +254,45 @@ class NuGraph3DA(LightningModule):
                 f'semantic_accuracy_class_val/{c}'
             ]]
         self.logger.experiment.add_custom_scalars(scalars)
+        
 
-    def on_train_epoch_start(self): #checking if DA shuld be turned on
-        epoch = self.trainer.current_epoch        
-        if epoch >= self.event_decoder.warmup_epochs:
-            if not self.event_decoder.use_domain_adaptation:
-                print(f"[Epoch {epoch}] Enabling DA")
-            self.event_decoder.use_domain_adaptation = True
-        else:
-            print(f"[Epoch {epoch}] DA is OFF (warmup phase)")
+    def on_train_epoch_start(self): 
+        epoch = self.trainer.current_epoch
+
+        """Some print functions in case monitoring is needed."""
+        #print("\n Starting new train epoch!")
+        
+        # if epoch >= self.event_decoder.warmup_epochs:
+        #     if not self.event_decoder.use_domain_adaptation:
+        #         print(f"[Epoch {epoch}] Enabling DA")
+        #     self.event_decoder.use_domain_adaptation = True
+        # else:
+        #     print(f"[Epoch {epoch}] DA is OFF (warmup phase)")
+
+
+        """ Check and toggle DA for event_decoder """
+        if hasattr(self, "event_decoder") and hasattr(self.event_decoder, "use_domain_adaptation"):
+            if epoch >= getattr(self.event_decoder, "warmup_epochs", 0):
+                if not self.event_decoder.use_domain_adaptation:
+                    print(f"[Epoch {epoch}] Enabling DA for event_decoder")
+                self.event_decoder.use_domain_adaptation = True
+            else:
+                print(f"[Epoch {epoch}] DA is OFF for event_decoder (warmup phase)")
+    
+        """ Check and toggle DA for semantic_decoder """
+        if hasattr(self, "semantic_decoder") and hasattr(self.semantic_decoder, "use_domain_adaptation"):
+            if epoch >= getattr(self.semantic_decoder, "warmup_epochs", 0):
+                if self.semantic_decoder.use_domain_adaptation is False:
+                    print(f"[Epoch {epoch}] DA is manually disabled for semantic_decoder — will not enable DA")
+                else:
+                    print(f"[Epoch {epoch}] Enabling DA for semantic_decoder")
+                    self.semantic_decoder.use_domain_adaptation = True
+            else:
+                print(f"[Epoch {epoch}] DA is OFF for semantic_decoder (warmup phase)")
+
+
+    def on_train_epoch_end(self):
+        print("\n Finished training epoch")
 
     def training_step(self,
                       batch: [Data, Data],
@@ -234,19 +307,29 @@ class NuGraph3DA(LightningModule):
     def validation_step(self,
                         batch: [Data, Data],
                         batch_idx: int) -> None:
+
         loss, metrics = self(batch, 'val')
         self.log('loss/val', loss, batch_size=batch[0].num_graphs)
         self.log_dict(metrics, batch_size=batch[0].num_graphs)
 
     def on_validation_epoch_end(self) -> None:
         epoch = self.trainer.current_epoch + 1
+        print("\n Validation epoch ended!")
         for decoder in self.decoders:
             decoder.on_epoch_end(self.logger, 'val', epoch)
 
     def test_step(self,
                   batch: [Data, Data],
                   batch_idx: int) -> None: #int = 0
-        loss, metrics = self(batch, 'test', True)
+
+        if isinstance(batch, (list, tuple)):
+            print(f"Test batch contains two elements: {type(batch[0])}, {type(batch[1])}")
+            batch_size = batch[0].num_graphs
+        else:
+            print(f"Test batch contains one element: {type(batch)}")
+            batch_size = batch.num_graphs
+            
+        loss, metrics = self(batch, 'test')
         self.log('loss/test', loss, batch_size=batch[0].num_graphs)
         self.log_dict(metrics, batch_size=batch[0].num_graphs)
         self.log_memory(batch, 'test')
@@ -344,7 +427,7 @@ class NuGraph3DA(LightningModule):
         model.add_argument('--learning-rate', type=float, default=0.001,
                            help='Max learning rate during training')
         model.add_argument('--da-loss', type=str, choices=['dann', 'mmd', 'sinkhorn', 'semantic'], default='mmd',
-                           help='Which DA loss to use (options are: dann, mmd, sinkhorn, semantic)')  ### NEW Domain Adaption loss options
+                           help='Which DA loss to use (options are: dann, mmd, sinkhorn, semantic)')   ### NEW Domain Adaption loss options
         model.add_argument('--warmup', type=int, default=0,
                            help='Include the warmup phase before domain adaptation loss turns on. Default is 0 (no warmup).')  ### NEW - when to start DA
         return parser
