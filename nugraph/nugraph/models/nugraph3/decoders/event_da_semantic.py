@@ -19,7 +19,7 @@ class EventDecoderDASemantic(nn.Module):
     Convolve interaction node embedding down to a set of categorical scores
     for each event class.
 
-    Use MMD/Sinkhorn loss on interaction node embedding to align them across the source and target dataset and improve classification.
+    Use Semantic loss on interaction node embedding to align them across the source and target dataset and improve classification.
 
     Args:
         interaction_features: Number of interaction node features
