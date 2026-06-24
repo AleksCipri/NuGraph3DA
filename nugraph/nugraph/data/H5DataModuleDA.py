@@ -152,8 +152,8 @@ class H5DataModuleDA(LightningDataModule):
                     Not fully tested yet!
         """
         self.combined_train = CombinedDataset(self.train_dataset,  self.train_datasett)
-        self.combined_val = CombinedDataset(self.val_dataset,  self.train_datasett)
-        self.combined_test = CombinedDataset(self.test_dataset,  self.train_datasett)
+        self.combined_val = CombinedDataset(self.val_dataset,  self.val_datasett)
+        self.combined_test = CombinedDataset(self.test_dataset,  self.test_datasett)
 
 
 
