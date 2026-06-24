@@ -15,7 +15,8 @@ warnings.filterwarnings('ignore', '.*TypedStorage is deprecated.*')
 
 #####UPDATED#######
 Data = ng.data.H5DataModuleDA
-Model = ng.models.nugraph3.nugraph3_da.NuGraph3DA
+Model = ng.models.nugraph3.nugraph3_da_event_semantic.NuGraph3DA
+#Model = ng.models.nugraph3.nugraph3_da.NuGraph3DA
 #####UPDATED#######
 
 
@@ -76,7 +77,7 @@ def train(args):
                          limit_train_batches=args.limit_train_batches,
                          limit_val_batches=args.limit_val_batches,
                          logger=logger, profiler=args.profiler,
-                         callbacks=callbacks, plugins=plugins)
+                         callbacks=callbacks, plugins=plugins) #fast_dev_run=True, detect_anomaly=True,
     
     trainer.fit(model, datamodule=nudata,ckpt_path=args.resume)
     trainer.test(datamodule=nudata) 
